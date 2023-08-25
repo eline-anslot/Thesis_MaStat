@@ -1,0 +1,772 @@
+---
+title: "Thesis - Data analysis"
+author: "Eline Anslot"
+date: "2023-08-09"
+output: html_document
+---
+
+```{r loading libraries}
+library(goldilocks)
+library(ggplot2)
+source("./Functions2.R")
+```
+
+# Dataset
+
+```{r dataset}
+load("./Dataset_lambda_0.3.RData")
+data <- data_thesis
+recruitment_acc <- recruitment_rate
+```
+
+
+```{r infor}
+day_long <- 365 
+day_short_later <- 180
+day_short_before <- 30
+outcome <- "mrs_365d_binary"
+
+covariate_vec <- c("age", "ich_location", "ich_s_volume", "ivh_s_volume")
+short_vec_later <- "mrs_180d_binary"
+short_vec_before <- "mrs_30d_binary"
+
+```
+
+
+# Stage 1
+
+## Proposed method short-term endpoint measured at day 30
+
+### Descriptive
+```{r cohorts short early}
+#################################################
+#######Sample at interim#######
+#################################################
+#time at which participants have completed the long-term endpoint y
+time_ppt_long <- recruitment_acc + day_long
+
+#Last participant considered at interim => index of that person
+index_n1_ppt <- order(recruitment_acc)[design$n1]
+
+#time at which the last n1 participant completed they long-term endpoint y
+time_n1_ppt <- time_ppt_long[index_n1_ppt]
+
+###Cohort1####
+# Return true or false depending on whether participants have completed 
+# the long-term endpoint at stage 1 
+indices_long <- time_ppt_long <= time_n1_ppt & 
+  1:length(recruitment_acc) %in% order(recruitment_acc)[1:design$n1]
+
+#Subgroup of the sample at interim which have all information 
+#(baseline covariates, short_term and long-term endpoints)
+cohort1_l <- data[indices_long, ]
+
+#The baseline covariates that we will take into account
+cohort_cov_var <- covariate_vec
+
+#time at which participants have completed the short-term endpoint x
+time_ppt_short <- recruitment_acc + day_short_before
+
+# Return true or false depending on whether we have
+# information on the short-term endpoint at stage 1 
+indices_short <- time_ppt_short <= time_n1_ppt
+
+# Return true or false depending on whether we have
+# information on the baseline covariates at stage 1 
+indices_bascov <- recruitment_acc <= time_n1_ppt
+
+# Return true or false depending on whether we have
+# information on the baseline covariates and short term but not
+# of the long term endpoint at stage 1 ==> Cohort 2
+indices_cohort2 <- indices_short &! indices_long
+
+# Return true or false depending on whether we have
+# information on the baseline covariates but not on the short-term and 
+# on the long term endpoint at stage 1 => Cohort 3
+indices_cohort3 <- indices_bascov &! indices_short
+
+#The baseline covariates and short term endpoint variables that we will take
+#into account
+cohort_short_var <- c(covariate_vec, short_vec_before)
+
+#####Subgroups######
+###Cohort2####
+#Participants with baseline covariates and short-term endpoint but no 
+#long-term endpoint
+cohort2_s <- data[indices_cohort2, cohort_short_var, drop = FALSE]
+
+###Cohort3###
+#Participants with only baseline covariates information
+cohort3_bc     <- data[indices_cohort3, cohort_cov_var, drop = FALSE]
+```
+
+#### Cohort 1 
+```{r des short early}
+print("age")
+mean(cohort1_l$age)
+sd(cohort1_l$age)
+cor(cohort1_l$age, cohort1_l$mrs_365d_binary)
+
+print("gender")
+table(cohort1_l$male)
+
+print("ich_location")
+table(cohort1_l$ich_location)
+cor(cohort1_l$ich_s_volume, cohort1_l$mrs_365d_binary)
+
+print("ich_s_volume")
+mean(cohort1_l$ich_s_volume)
+sd(cohort1_l$ich_s_volume)
+cor(as.numeric(cohort1_l$ich_location == "Deep"), cohort1_l$mrs_365d_binary)
+
+print("ivh_s_volume")
+mean(cohort1_l$ivh_s_volume)
+sd(cohort1_l$ivh_s_volume)
+cor(cohort1_l$ivh_s_volume, cohort1_l$mrs_365d_binary)
+
+print("X30d")
+table(cohort1_l$mrs_30d_binary)
+table(cohort1_l$mrs_30d_binary, cohort1_l$mrs_365d_binary)
+cor(cohort1_l$mrs_30d_binary, cohort1_l$mrs_365d_binary)
+
+print("X180d")
+table(cohort1_l$mrs_180d_binary)
+table(cohort1_l$mrs_180d_binary, cohort1_l$mrs_365d_binary)
+cor(cohort1_l$mrs_180d_binary, cohort1_l$mrs_365d_binary)
+
+print("X365d")
+table(cohort1_l$mrs_365d_binary)
+```
+
+#### Cohort 3 
+```{r des cohort 3 X30}
+print("age")
+mean(cohort2_s$age)
+sd(cohort2_s$age)
+
+print("ich_location")
+table(cohort2_s$ich_location)
+
+print("ich_s_volume")
+mean(cohort2_s$ich_s_volume)
+sd(cohort2_s$ich_s_volume)
+
+print("ivh_s_volume")
+mean(cohort2_s$ivh_s_volume)
+sd(cohort2_s$ivh_s_volume)
+
+print("X30d")
+table(cohort2_s$mrs_30d_binary)
+```
+```{r explorative }
+cor(data[indices_cohort2, c("mrs_30d_binary", "mrs_365d_binary")])
+```
+
+### Analyses
+
+```{r analysis method short early}
+#################################################
+#######Estimate#######
+#################################################
+model   <- glm(to_formula(outcome, cohort_short_var),
+               family = binomial(link = "logit"),
+               data = cohort1_l)
+
+data_cohort1_2 <- rbind(cohort1_l[, cohort_short_var, drop = FALSE], 
+                        cohort2_s)
+
+predict2 <- predict(model, 
+                    type = "response",
+                    newdata = data_cohort1_2)
+
+model2 <- glm(to_formula("predict2", cohort_cov_var),
+              family = binomial(link="logit"),
+              data = cbind(data_cohort1_2, predict2))
+
+predict <- predict(model2,
+                   type = "response",
+                   newdata = rbind(data_cohort1_2[, cohort_cov_var, drop = FALSE],
+                                   cohort3_bc))
+
+estimate <- mean(predict)
+
+#################################################
+#######Variance#######
+#################################################
+new_indices_long <- indices_long[indices_bascov]
+new_indices_short <- indices_short[indices_bascov]
+cycx <- new_indices_long/(mean(new_indices_long))#*mean(new_indices_short))
+predict2_adj <- c(predict2, rep(0, times = sum(indices_bascov) - length(predict2)))
+yi_yihat <- data[indices_bascov, outcome] - predict2_adj
+predict_adj <- c(predict, rep(0, times = sum(indices_bascov) - length(predict)))
+cix_yihat_yihat2 <- (new_indices_short/mean(new_indices_short) ) *(predict2_adj - predict_adj)
+variance <- var( (cycx*yi_yihat + cix_yihat_yihat2 + predict_adj) )
+
+#################################################
+#######Results#######
+#################################################
+
+results <- list(estimate = estimate,
+                variance = variance,
+                n_cohort1 = sum(indices_long),
+                n_cohort2 = sum(indices_cohort2),
+                n_cohort3 = sum(indices_cohort3),
+                n_interim = sum(indices_cohort2) + 
+                            sum(indices_cohort3) + 
+                            sum(indices_long))
+results
+```
+
+```{r decisions early}
+##Suggested method##
+se <- sqrt(results$variance/results$n_interim)
+t1 <- (results$estimate - design$p0)/se
+VL_decision <- ifelse(t1 <= qnorm(design$PET), "stop", "continue")
+```
+
+
+## Proposed method short-term endpoint measured at day 180
+### Descriptive
+```{r cohort shorts late}
+#################################################
+#######Sample at interim#######
+#################################################
+#time at which participants have completed the long-term endpoint y
+time_ppt_long <- recruitment_acc + day_long
+
+#Last participant considered at interim => index of that person
+index_n1_ppt <- order(recruitment_acc)[design$n1]
+
+#time at which the last n1 participant completed they long-term endpoint y
+time_n1_ppt <- time_ppt_long[index_n1_ppt]
+
+###Cohort1####
+# Return true or false depending on whether participants have completed 
+# the long-term endpoint at stage 1 
+indices_long <- time_ppt_long <= time_n1_ppt & 
+  1:length(recruitment_acc) %in% order(recruitment_acc)[1:design$n1]
+
+#Subgroup of the sample at interim which have all information 
+#(baseline covariates, short_term and long-term endpoints)
+cohort1_l <- data[indices_long, ]
+
+#The baseline covariates that we will take into account
+cohort_cov_var <- covariate_vec
+
+#time at which participants have completed the short-term endpoint x
+time_ppt_short <- recruitment_acc + day_short_later
+
+# Return true or false depending on whether we have
+# information on the short-term endpoint at stage 1 
+indices_short <- time_ppt_short <= time_n1_ppt
+
+# Return true or false depending on whether we have
+# information on the baseline covariates at stage 1 
+indices_bascov <- recruitment_acc <= time_n1_ppt
+
+# Return true or false depending on whether we have
+# information on the baseline covariates and short term but not
+# of the long term endpoint at stage 1 ==> Cohort 2
+indices_cohort2 <- indices_short &! indices_long
+
+# Return true or false depending on whether we have
+# information on the baseline covariates but not on the short-term and 
+# on the long term endpoint at stage 1 => Cohort 3
+indices_cohort3 <- indices_bascov &! indices_short
+
+#The baseline covariates and short term endpoint variables that we will take
+#into account
+cohort_short_var <- c(covariate_vec, short_vec_later)
+
+#####Subgroups######
+###Cohort2####
+#Participants with baseline covariates and short-term endpoint but no 
+#long-term endpoint
+cohort2_s <- data[indices_cohort2, cohort_short_var, drop = FALSE]
+
+###Cohort3###
+#Participants with only baseline covariates information
+cohort3_bc     <- data[indices_cohort3, cohort_cov_var, drop = FALSE]
+```
+
+
+#### Cohort 1 
+```{r des short late}
+print("age")
+mean(cohort1_l$age)
+sd(cohort1_l$age)
+cor(cohort1_l$age, cohort1_l$mrs_365d_binary)
+
+print("gender")
+table(cohort1_l$male)
+
+print("ich_location")
+table(cohort1_l$ich_location)
+cor(cohort1_l$ich_s_volume, cohort1_l$mrs_365d_binary)
+
+print("ich_s_volume")
+mean(cohort1_l$ich_s_volume)
+sd(cohort1_l$ich_s_volume)
+cor(as.numeric(cohort1_l$ich_location == "Deep"), cohort1_l$mrs_365d_binary)
+
+print("ivh_s_volume")
+mean(cohort1_l$ivh_s_volume)
+sd(cohort1_l$ivh_s_volume)
+cor(cohort1_l$ivh_s_volume, cohort1_l$mrs_365d_binary)
+
+print("X30d")
+table(cohort1_l$mrs_30d_binary)
+table(cohort1_l$mrs_30d_binary, cohort1_l$mrs_365d_binary)
+cor(cohort1_l$mrs_30d_binary, cohort1_l$mrs_365d_binary)
+
+print("X180d")
+table(cohort1_l$mrs_180d_binary)
+table(cohort1_l$mrs_180d_binary, cohort1_l$mrs_365d_binary)
+cor(cohort1_l$mrs_180d_binary, cohort1_l$mrs_365d_binary)
+
+print("X365d")
+table(cohort1_l$mrs_365d_binary)
+```
+
+#### Cohort 2
+```{r des cohort 2 X180}
+print("age")
+mean(cohort2_s$age)
+sd(cohort2_s$age)
+
+print("ich_location")
+table(cohort2_s$ich_location)
+
+print("ich_s_volume")
+mean(cohort2_s$ich_s_volume)
+sd(cohort2_s$ich_s_volume)
+
+print("ivh_s_volume")
+mean(cohort2_s$ivh_s_volume)
+sd(cohort2_s$ivh_s_volume)
+
+print("X180d")
+table(cohort2_s$mrs_180d_binary)
+```
+#### Cohort 4
+```{r des cohort 4 X180}
+print("age")
+mean(cohort3_bc$age)
+sd(cohort3_bc$age)
+
+print("ich_location")
+table(cohort3_bc$ich_location)
+
+print("ich_s_volume")
+mean(cohort3_bc$ich_s_volume)
+sd(cohort3_bc$ich_s_volume)
+
+print("ivh_s_volume")
+mean(cohort3_bc$ivh_s_volume)
+sd(cohort3_bc$ivh_s_volume)
+```
+
+
+### Analysis
+```{r analysis short later}
+#################################################
+#######Estimate#######
+#################################################
+model   <- glm(to_formula(outcome, cohort_short_var),
+               family = binomial(link = "logit"),
+               data = cohort1_l)
+
+data_cohort1_2 <- rbind(cohort1_l[, cohort_short_var, drop = FALSE], 
+                        cohort2_s)
+
+predict2 <- predict(model, 
+                    type = "response",
+                    newdata = data_cohort1_2)
+
+model2 <- glm(to_formula("predict2", cohort_cov_var),
+              family = binomial(link="logit"),
+              data = cbind(data_cohort1_2, predict2))
+
+predict <- predict(model2,
+                   type = "response",
+                   newdata = rbind(data_cohort1_2[, cohort_cov_var, drop = FALSE],
+                                   cohort3_bc))
+
+estimate <- mean(predict)
+
+#################################################
+#######Variance#######
+#################################################
+new_indices_long <- indices_long[indices_bascov]
+new_indices_short <- indices_short[indices_bascov]
+cycx <- new_indices_long/(mean(new_indices_long))#*mean(new_indices_short))
+predict2_adj <- c(predict2, rep(0, times = sum(indices_bascov) - length(predict2)))
+yi_yihat <- data[indices_bascov, outcome] - predict2_adj
+predict_adj <- c(predict, rep(0, times = sum(indices_bascov) - length(predict)))
+cix_yihat_yihat2 <- (new_indices_short/mean(new_indices_short) ) *(predict2_adj - predict_adj)
+variance <- var( (cycx*yi_yihat + cix_yihat_yihat2 + predict_adj) )
+
+#################################################
+#######Results#######
+#################################################
+
+results <- list(estimate = estimate,
+                variance = variance,
+                n_cohort1 = sum(indices_long),
+                n_cohort2 = sum(indices_cohort2),
+                n_cohort3 = sum(indices_cohort3),
+                n_interim = sum(indices_cohort2) + 
+                            sum(indices_cohort3) + 
+                            sum(indices_long))
+results
+```
+
+```{r decisions short later}
+##Suggested method##
+se <- sqrt(results$variance/results$n_interim)
+t1 <- (results$estimate - design$p0)/se
+VL_decision <- ifelse(t1 <= qnorm(design$PET), "stop", "continue")
+```
+
+## Proposed method both short-term endpoints
+### Descriptive
+```{r cohorts both shorts}
+#################################################
+#######Sample at interim#######
+#################################################
+#time at which participants have completed the long-term endpoint y
+time_ppt_long <- recruitment_acc + day_long
+
+#Last participant considered at interim => index of that person
+index_n1_ppt <- order(recruitment_acc)[design$n1]
+
+#time at which the last n1 participant completed they long-term endpoint y
+time_n1_ppt <- time_ppt_long[index_n1_ppt]
+
+###Cohort1####
+# Return true or false depending on whether participants have completed 
+# the long-term endpoint at stage 1 
+indices_long <- time_ppt_long <= time_n1_ppt & 
+  1:length(recruitment_acc) %in% order(recruitment_acc)[1:design$n1]
+
+#Subgroup of the sample at interim which have all information 
+#(baseline covariates, short_term and long-term endpoints)
+cohort1_l <- data[indices_long, ]
+
+#time at which participants have completed the short-term endpoint x
+time_ppt_short_later <- recruitment_acc + day_short_later
+
+# Return true or false depending on whether we have
+# information on the short-term endpoint at stage 1 
+indices_short_later <- time_ppt_short_later <= time_n1_ppt
+
+#time at which participants have completed the short-term endpoint x
+time_ppt_short_before <- recruitment_acc + day_short_before
+
+# Return true or false depending on whether we have
+# information on the short-term endpoint at stage 1 
+indices_short_before <- time_ppt_short_before <= time_n1_ppt
+
+# Return true or false depending on whether we have
+# information on the baseline covariates at stage 1 
+indices_bascov <- recruitment_acc <= time_n1_ppt
+
+# Return true or false depending on whether we have
+# information on the baseline covariates and short term but not
+# of the long term endpoint at stage 1 ==> Cohort 2
+indices_cohort2 <- indices_short_later &! indices_long
+
+indices_cohort3 <- indices_short_before &! indices_short_later
+
+# Return true or false depending on whether we have
+# information on the baseline covariates but not on the short-term and 
+# on the long term endpoint at stage 1 => Cohort 3
+indices_cohort4 <- indices_bascov &! indices_short_before
+
+#The baseline covariates and short term endpoint variables that we will take
+#into account
+cohort_short_later_var <- c(covariate_vec, "mrs_30d_binary", "mrs_180d_binary")
+cohort_short_before_var <- c(covariate_vec, "mrs_30d_binary")
+#The baseline covariates that we will take into account
+cohort_cov_var <- covariate_vec
+#####Subgroups######
+###Cohort2####
+#Participants with baseline covariates and short-term endpoint but no 
+#long-term endpoint
+cohort2_s <- data[indices_cohort2, cohort_short_later_var, drop = FALSE]
+
+cohort3_s <- data[indices_cohort3, cohort_short_before_var, drop = FALSE]
+
+###Cohort3###
+#Participants with only baseline covariates information
+cohort4_bc <- data[indices_cohort4, cohort_cov_var, drop = FALSE]
+```
+
+
+#### Cohort 1 
+```{r des cohort 1}
+print("age")
+mean(cohort1_l$age)
+sd(cohort1_l$age)
+cor(cohort1_l$age, cohort1_l$mrs_365d_binary)
+
+print("gender")
+table(cohort1_l$male)
+
+print("ich_location")
+table(cohort1_l$ich_location)
+cor(cohort1_l$ich_s_volume, cohort1_l$mrs_365d_binary)
+
+print("ich_s_volume")
+mean(cohort1_l$ich_s_volume)
+sd(cohort1_l$ich_s_volume)
+cor(as.numeric(cohort1_l$ich_location == "Deep"), cohort1_l$mrs_365d_binary)
+
+print("ivh_s_volume")
+mean(cohort1_l$ivh_s_volume)
+sd(cohort1_l$ivh_s_volume)
+cor(cohort1_l$ivh_s_volume, cohort1_l$mrs_365d_binary)
+
+print("X30d")
+table(cohort1_l$mrs_30d_binary)
+table(cohort1_l$mrs_30d_binary, cohort1_l$mrs_365d_binary)
+cor(cohort1_l$mrs_30d_binary, cohort1_l$mrs_365d_binary)
+
+print("X180d")
+table(cohort1_l$mrs_180d_binary)
+table(cohort1_l$mrs_180d_binary, cohort1_l$mrs_365d_binary)
+cor(cohort1_l$mrs_180d_binary, cohort1_l$mrs_365d_binary)
+
+print("X365d")
+table(cohort1_l$mrs_365d_binary)
+```
+
+#### Cohort 2
+```{r des cohort 2}
+print("age")
+mean(cohort2_s$age)
+sd(cohort2_s$age)
+
+print("ich_location")
+table(cohort2_s$ich_location)
+
+print("ich_s_volume")
+mean(cohort2_s$ich_s_volume)
+sd(cohort2_s$ich_s_volume)
+
+print("ivh_s_volume")
+mean(cohort2_s$ivh_s_volume)
+sd(cohort2_s$ivh_s_volume)
+
+print("X180d")
+table(cohort2_s$mrs_180d_binary)
+```
+#### Cohort 3
+```{r des cohort3}
+print("age")
+mean(cohort3_s$age)
+sd(cohort3_s$age)
+
+print("ich_location")
+table(cohort3_s$ich_location)
+
+print("ich_s_volume")
+mean(cohort3_s$ich_s_volume)
+sd(cohort3_s$ich_s_volume)
+
+print("ivh_s_volume")
+mean(cohort3_s$ivh_s_volume)
+sd(cohort3_s$ivh_s_volume)
+
+print("X30")
+table(cohort3_s$mrs_30d_binary)
+```
+
+```{r explorative both }
+cor(data[indices_cohort3, c("mrs_30d_binary", "mrs_365d_binary")])
+cor(data[indices_cohort2, c("mrs_30d_binary", "mrs_180d_binary", "mrs_365d_binary")])
+```
+
+### Analysis
+```{r analysis with both shorts}
+#################################################
+#######Estimate####### 
+#################################################
+model   <- glm(to_formula(outcome, cohort_short_later_var),
+               family = binomial(link = "logit"),
+               data = cohort1_l)
+
+data_cohort1_2 <- rbind(cohort1_l[, cohort_short_later_var, drop = FALSE], 
+                        cohort2_s)
+
+predict2 <- predict(model, 
+                    type = "response",
+                    newdata = data_cohort1_2)
+
+model2 <- glm(to_formula("predict2", cohort_short_before_var),
+              family = binomial(link="logit"),
+              data = cbind(data_cohort1_2, predict2))
+
+data_cohort1_2_3 <- rbind(data_cohort1_2[, cohort_short_before_var, drop = FALSE],
+                                   cohort3_s)
+
+predict3 <- predict(model2,
+                   type = "response",
+                   newdata = data_cohort1_2_3)
+
+model3 <- glm(to_formula("predict3", cohort_cov_var),
+              family = binomial(link="logit"),
+              data = cbind(data_cohort1_2_3, predict3))
+
+predict <- predict(model3,
+                   type = "response",
+                   newdata = c(data_cohort1_2_3,
+                                   cohort4_bc))
+
+estimate <- mean(predict)
+
+#################################################
+#######Variance#######
+#################################################
+
+new_indices_long         <- indices_long[indices_bascov]
+new_indices_short_later  <- indices_short_later[indices_bascov]
+new_indices_short_before <- indices_short_before[indices_bascov]
+
+#Probability to havve a long-term endpoint Y=> n_cohort1/n_interim:
+#mean(indices_long[indices_short_later])*mean(indices_short_later[indices_short_before])*mean(indices_short_before[indices_bascov]) = mean(new_indices_long) => Binary_index/prob_Y
+#=> scale term for those who have a long-term endpoint Y
+prob_Y <- new_indices_long/mean(new_indices_long)
+
+#Probability to have a short-term endpoint later
+prob_X_later <- new_indices_short_later/mean(new_indices_short_later)
+
+#Probability to have a short-term endpoint before
+prob_X_before <- new_indices_short_before/mean(new_indices_short_before)
+
+predict2 <- c(predict2, rep(0, times = sum(indices_bascov) - length(predict2)))
+error_prediction2 <- data[indices_bascov, outcome] - predict2
+
+predict3 <- c(predict3, rep(0, times = sum(indices_bascov) - length(predict3)))
+error_prediction3 <- predict2 - predict3
+
+predict <- c(predict, rep(0, times = sum(indices_bascov) - length(predict)))
+error_prediction <- predict3 - predict
+
+variance <- var(prob_Y*error_prediction2 + prob_X_later*error_prediction3 + prob_X_before*error_prediction + predict)
+
+#################################################
+#######Results#######
+#################################################
+
+results <- list(estimate = estimate,
+                variance = variance,
+                n_cohort1 = sum(indices_long),
+                n_cohort2 = sum(indices_cohort2),
+                n_cohort3 = sum(indices_cohort3),
+                n_cohort4 = sum(indices_cohort4),
+                n_interim = sum(indices_cohort2) + 
+                            sum(indices_cohort3) + 
+                            sum(indices_long) +
+                            sum(indices_cohort4))
+results
+```
+
+```{r decisions short both}
+##Suggested method##
+se <- sqrt(results$variance/results$n_interim)
+t1 <- (results$estimate - design$p0)/se
+VL_decision <- ifelse(t1 <= qnorm(design$PET), "stop", "continue")
+```
+
+# Stage 2
+## Descriptive
+### Gender
+```{r gender}
+n_male <-sum(data$male)
+```
+
+### Age
+```{r age stage 2}
+data.frame(cat = c("all", "man", "women"),
+           mean = c(mean(data$age), mean(data$age[data$male == 1]), mean(data$age[data$male == 0])),
+           sd = c(sd(data$age), sd(data$age[data$male == 1]), sd(data$age[data$male == 0])),
+           max = c(max(data$age), max(data$age[data$male == 1]), max(data$age[data$male == 0])),
+           min = c(min(data$age), min(data$age[data$male == 1]), min(data$age[data$male == 0]))
+)
+
+hist(data$age)
+hist(data$age[data$male == 1])
+hist(data$age[data$male == 0])
+
+cor(data$age, data$mrs_365d_binary)
+
+ggplot(data = data, mapping = aes(x = factor(mrs_365d_binary), y = age)) +
+  geom_boxplot() + 
+  ylab("Age (years)") +
+  scale_x_discrete(name ="Functional outcome at day 365", 
+                  labels= c("0" = "Failure", "1" = "Success"))
+```
+### Ich_location
+
+```{r ich_location stage 2}
+sum(data$ich_location == "Deep")
+sum(data$ich_location == "Lobar")
+table(data$ich_location, data$mrs_365d_binary)
+cor(as.numeric(data$ich_location == "Deep"), data$mrs_365d_binary)
+```
+### Ich_s_volume
+```{r ich_volume stage 2}
+mean(data$ich_s_volume)
+sd(data$ich_s_volume)
+min(data$ich_s_volume)
+max(data$ich_s_volume)
+quantile(data$ich_s_volume, probs = c(0.25, 0.75))
+
+ggplot(data = data, mapping = aes(x = factor(mrs_365d_binary), y = ich_s_volume)) +
+  geom_boxplot() + 
+  scale_x_discrete(name ="Functional outcome at day 365", 
+                  labels= c("0" = "Failure", "1" = "Success"))
+
+cor(data$ich_s_volume, data$mrs_365d_binary)
+```
+
+
+### Ivh_s_volume
+```{r ivh_volume stage 2}
+mean(data$ivh_s_volume)
+sd(data$ivh_s_volume)
+min(data$ivh_s_volume)
+max(data$ivh_s_volume)
+quantile(data$ivh_s_volume, probs = c(0.25, 0.75))
+
+ggplot(data = data, mapping = aes(x = factor(mrs_365d_binary), y = ivh_s_volume)) +
+  geom_boxplot() + 
+  scale_x_discrete(name ="Functional outcome at day 365", 
+                  labels= c("0" = "Failure", "1" = "Success"))
+plot(data$mrs_365d_binary, data$ivh_s_volume)
+table(data$mrs_365d_binary, data$ivh_s_volume)
+
+cor(data$ivh_s_volume, data$mrs_365d_binary)
+```
+
+### X30d
+```{r X30d}
+sum(data$mrs_30d_binary == "0")
+sum(data$mrs_30d_binary == "1")
+table(data$mrs_30d_binary, data$mrs_365d_binary)
+cor(data$mrs_30d_binary, data$mrs_365d_binary)
+```
+### X180d
+```{r X180d}
+sum(data$mrs_180d_binary == "0")
+sum(data$mrs_180d_binary == "1")
+table(data$mrs_180d_binary, data$mrs_365d_binary)
+cor(data$mrs_180d_binary, data$mrs_365d_binary)
+```
+
+## Analyse
+```{r decision stage 2}
+decision_stage2(data$mrs_365d_binary, design$r2)
+```
+
